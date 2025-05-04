@@ -90,3 +90,84 @@
         total-interest
     )
 )
+
+;; Check if a loan needs to be liquidated
+(define-private (check-liquidation (loan-id uint))
+    (let
+        (
+            (loan (unwrap! (map-get? loans {loan-id: loan-id}) ERR-LOAN-NOT-FOUND))
+            (btc-price (unwrap! (get price (map-get? collateral-prices {asset: "BTC"})) ERR-NOT-INITIALIZED))
+            (current-ratio (calculate-collateral-ratio (get collateral-amount loan) (get loan-amount loan) btc-price))
+        )
+        (if (<= current-ratio (var-get liquidation-threshold))
+            (liquidate-position loan-id)
+            (ok true)
+        )
+    )
+)
+
+;; Execute liquidation of an under-collateralized position
+(define-private (liquidate-position (loan-id uint))
+    (let
+        (
+            (loan (unwrap! (map-get? loans {loan-id: loan-id}) ERR-LOAN-NOT-FOUND))
+            (borrower (get borrower loan))
+        )
+        (begin
+            (map-set loans
+                {loan-id: loan-id}
+                (merge loan {status: "liquidated"})
+            )
+            (map-delete user-loans {user: borrower})
+            (ok true)
+        )
+    )
+)
+
+;; Validation helper for loan IDs
+(define-private (validate-loan-id (loan-id uint))
+    (and 
+        (> loan-id u0)
+        (<= loan-id (var-get total-loans-issued))
+    )
+)
+
+;; Validation helper for supported assets
+(define-private (is-valid-asset (asset (string-ascii 3)))
+    (is-some (index-of VALID-ASSETS asset))
+)
+
+;; Validation helper for price feeds
+(define-private (is-valid-price (price uint))
+    (and 
+        (> price u0)
+        (<= price u1000000000000) ;; Reasonable upper limit for price
+    )
+)
+
+;; Helper function to filter out repaid loans
+(define-private (not-equal-loan-id (id uint))
+    (not (is-eq id id))
+)
+
+;; Public Functions
+
+;; Initialize the lending platform
+(define-public (initialize-platform)
+    (begin
+        (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+        (asserts! (not (var-get platform-initialized)) ERR-ALREADY-INITIALIZED)
+        (var-set platform-initialized true)
+        (ok true)
+    )
+)
+
+;; Deposit BTC collateral
+(define-public (deposit-collateral (amount uint))
+    (begin
+        (asserts! (var-get platform-initialized) ERR-NOT-INITIALIZED)
+        (asserts! (> amount u0) ERR-INVALID-AMOUNT)
+        (var-set total-btc-locked (+ (var-get total-btc-locked) amount))
+        (ok true)
+    )
+)
