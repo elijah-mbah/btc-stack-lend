@@ -171,3 +171,94 @@
         (ok true)
     )
 )
+
+;; Request a new loan using BTC collateral
+(define-public (request-loan (collateral uint) (loan-amount uint))
+    (let
+        (
+            (btc-price (unwrap! (get price (map-get? collateral-prices {asset: "BTC"})) ERR-NOT-INITIALIZED))
+            (collateral-value (* collateral btc-price))
+            (required-collateral (* loan-amount (var-get minimum-collateral-ratio)))
+            (loan-id (+ (var-get total-loans-issued) u1))
+        )
+        (begin
+            (asserts! (var-get platform-initialized) ERR-NOT-INITIALIZED)
+            (asserts! (>= collateral-value required-collateral) ERR-INSUFFICIENT-COLLATERAL)
+            
+            ;; Create new loan record
+            (map-set loans
+                {loan-id: loan-id}
+                {
+                    borrower: tx-sender,
+                    collateral-amount: collateral,
+                    loan-amount: loan-amount,
+                    interest-rate: u5, ;; 5% interest rate
+                    start-height: stacks-block-height,
+                    last-interest-calc: stacks-block-height,
+                    status: "active"
+                }
+            )
+            
+            ;; Update user's active loans
+            (match (map-get? user-loans {user: tx-sender})
+                existing-loans (map-set user-loans
+                    {user: tx-sender}
+                    {active-loans: (unwrap! (as-max-len? (append (get active-loans existing-loans) loan-id) u10) ERR-INVALID-AMOUNT)}
+                )
+                (map-set user-loans
+                    {user: tx-sender}
+                    {active-loans: (list loan-id)}
+                )
+            )
+            
+            (var-set total-loans-issued (+ (var-get total-loans-issued) u1))
+            (ok loan-id)
+        )
+    )
+)
+
+;; Repay an active loan
+(define-public (repay-loan (loan-id uint) (amount uint))
+    (begin
+        ;; Validate loan-id first
+        (asserts! (validate-loan-id loan-id) ERR-INVALID-LOAN-ID)
+        
+        (let
+            (
+                (loan (unwrap! (map-get? loans {loan-id: loan-id}) ERR-LOAN-NOT-FOUND))
+                (interest-owed (calculate-interest 
+                    (get loan-amount loan)
+                    (get interest-rate loan)
+                    (- stacks-block-height (get last-interest-calc loan))
+                ))
+                (total-owed (+ (get loan-amount loan) interest-owed))
+            )
+            (begin
+                (asserts! (is-eq (get status loan) "active") ERR-LOAN-NOT-ACTIVE)
+                (asserts! (is-eq (get borrower loan) tx-sender) ERR-NOT-AUTHORIZED)
+                (asserts! (>= amount total-owed) ERR-INVALID-AMOUNT)
+                
+                ;; Update loan status
+                (map-set loans
+                    {loan-id: loan-id}
+                    (merge loan {
+                        status: "repaid",
+                        last-interest-calc: stacks-block-height
+                    })
+                )
+                
+                ;; Return collateral to borrower
+                (var-set total-btc-locked (- (var-get total-btc-locked) (get collateral-amount loan)))
+                
+                ;; Remove from active loans
+                (match (map-get? user-loans {user: tx-sender})
+                    existing-loans (ok (map-set user-loans
+                        {user: tx-sender}
+                        {active-loans: (filter not-equal-loan-id (get active-loans existing-loans))}
+                    ))
+                    (ok false)
+                )
+            )
+        )
+    )
+)
