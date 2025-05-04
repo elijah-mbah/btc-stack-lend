@@ -262,3 +262,68 @@
         )
     )
 )
+
+;; Governance Functions
+
+;; Update the minimum collateral ratio
+(define-public (update-collateral-ratio (new-ratio uint))
+    (begin
+        (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+        (asserts! (>= new-ratio u110) ERR-INVALID-AMOUNT)
+        (var-set minimum-collateral-ratio new-ratio)
+        (ok true)
+    )
+)
+
+;; Update the liquidation threshold
+(define-public (update-liquidation-threshold (new-threshold uint))
+    (begin
+        (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+        (asserts! (>= new-threshold u100) ERR-INVALID-AMOUNT)
+        (var-set liquidation-threshold new-threshold)
+        (ok true)
+    )
+)
+
+;; Update price feed for a specific asset
+(define-public (update-price-feed (asset (string-ascii 3)) (new-price uint))
+    (begin
+        (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+        ;; Validate asset and price
+        (asserts! (is-valid-asset asset) ERR-INVALID-ASSET)
+        (asserts! (is-valid-price new-price) ERR-INVALID-PRICE)
+        
+        ;; Only proceed if validations pass
+        (ok (map-set collateral-prices
+            {asset: asset}
+            {price: new-price}
+        ))
+    )
+)
+
+;; Read-Only Functions
+
+;; Get detailed information about a specific loan
+(define-read-only (get-loan-details (loan-id uint))
+    (map-get? loans {loan-id: loan-id})
+)
+
+;; Get all active loans for a specific user
+(define-read-only (get-user-loans (user principal))
+    (map-get? user-loans {user: user})
+)
+
+;; Get platform statistics
+(define-read-only (get-platform-stats)
+    {
+        total-btc-locked: (var-get total-btc-locked),
+        total-loans-issued: (var-get total-loans-issued),
+        minimum-collateral-ratio: (var-get minimum-collateral-ratio),
+        liquidation-threshold: (var-get liquidation-threshold)
+    }
+)
+
+;; Get list of supported assets
+(define-read-only (get-valid-assets)
+    VALID-ASSETS
+)
